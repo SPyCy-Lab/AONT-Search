@@ -8,16 +8,8 @@ A Rust framework for enumerating **All-Or-Nothing Transforms (AONTs)** using a B
 - Column-wise permutation equivalence testing
 
 The current implementation can fully enumerate small parameters such as 
-\[
-(2,3,3)\text{-AONT}, 
-\]
-\[
-(1,2,4)\text{-AONT}, 
-\]
-and
-\[
-(1,2,5)\text{-AONT}.
-\]
+
+(2,3,3)-AONT, (1,2,4)-AONT, and (1,2,5)-AONT.
 
 ---
 
@@ -114,9 +106,9 @@ let s = 3;
 
 This searches for a
 
-\[
-(t,s,q)\text{-AONT}.
-\]
+
+(t,s,q) - AONT.
+
 
 ---
 
