@@ -1,279 +1,229 @@
 # AONT Search
 
-A Rust framework for enumerating **All-Or-Nothing Transforms (AONTs)** using a Branch-and-Bound (BnB) search. The project also contains tools for analyzing the resulting AONTs, including:
+A Rust research codebase for enumerating **All-Or-Nothing Transforms (AONTs)** and investigating their **differential uniformity**. It includes branch-and-bound enumeration for small parameters, a randomized search based on coordinate-wise permutations of linear AONTs, exact differential-uniformity verifiers, and statistical experiments.
 
-- Linearity testing
-- Differential uniformity computation
-- Search tree estimation
-- Column-wise permutation equivalence testing
+The main executable is configured by editing `src/main.rs` and separate binaries are used to run the statistical experiments.
 
-The current implementation can fully enumerate small parameters such as 
+## Features
 
-(2,3,3)-AONT, (1,2,4)-AONT, and (1,2,5)-AONT.
+- **Branch-and-bound enumeration:** enumerate AONTs for small `(t,s,q)` parameters, with optional differential-uniformity analysis and column-wise permutation equivalence checks.
+- **Randomized search:** start with a linear AONT from a Cauchy matrix, independently permute input and output coordinates, and screen candidates using a subset of differential-distribution-table (DDT) rows.
+- **Exact verification:** compute the full differential uniformity of a selected candidate using the serial CPU verifier or, on macOS, the Metal verifier.
+- **Statistical experiments:** generate independent random permutation sets, compute exact differential uniformity for each, and report mean, sample standard deviation, median, minimum, and maximum.
+- **Reproducible examples:** `permutations_with_low_delta.txt` contains saved input/output permutations and reported differential uniformities.
 
----
+## Requirements and installation
 
-# Features
+- Rust toolchain supporting **edition 2024**, with Cargo.
+- Dependencies declared in `Cargo.toml`: `ark-ff`, `rand`, `rayon`, and `metal`.
+- Apple Metal is used by the macOS GPU verifier and `delta_statistics` binary. The CUDA verifier and `delta_statistics_cuda` binary target Linux with NVIDIA CUDA; building/running them additionally requires an appropriate CUDA toolchain and working CUDA integration. **The provided `Cargo.toml` does not by itself document or configure the CUDA build/linking steps.**
 
-The project currently contains the following modules.
+From the repository root:
 
-| Module | Purpose |
-|---------|---------|
-| `bnb.rs` | Branch-and-bound search for AONTs |
-| `differential_uniformity.rs` | Computes differential uniformity of mappings |
-| `equivalence.rs` | Tests whether nonlinear AONTs are column-wise symbol permutations of linear ones |
-| `linearity.rs` | Exact GF(q)-linearity test |
-| `time_estimator.rs` | Search complexity estimation and randomized tree sampling |
-| `mapping_io.rs` | Reading/writing AONT files |
-| `field.rs` | Finite field implementations |
-| `hamming.rs` | Hamming distance utilities |
-| `types.rs` | Common type definitions |
-| `config.rs` | Search configuration |
+```bash
+cargo build --release --bin aont-search
+```
 
----
+Platform-specific modules and dependencies may require adjustments when building outside macOS; do not assume the same build works unmodified on Linux.
 
-# Supported Fields
+## 1. Branch-and-bound enumeration
 
-## Prime Fields GF(p)
+Open `src/main.rs` and find the section **BRANCH AND BOUND SEARCH TO ENUMERATE AONTS**.
 
-Prime fields are implemented using **Arkworks**.
+### Choose a field
 
-Example:
+The included example defines `GF(3)` with Arkworks:
 
 ```rust
-use ark_ff::{Fp64, MontBackend, MontConfig};
-use aont_search::field::ArkPrimeField;
-
 #[derive(MontConfig)]
-#[modulus = "5"]
+#[modulus = "3"]
 #[generator = "2"]
-pub struct F5Config;
-
-pub type F5 = Fp64<MontBackend<F5Config, 1>>;
-
-let field =
-    ArkPrimeField::<F5>::new(F5::from(2u64));
+pub struct F3Config;
+pub type F3 = Fp64<MontBackend<F3Config, 1>>;
+let field = ArkPrimeField::<F3>::new(F3::from(2u64));
+let q = 3usize;
 ```
 
----
+To use a different prime field, update the modulus, generator, field type, and `q` consistently. The source also gives examples for `GF(4)` (using `Gf4`) and `GF(5)`.
 
-## GF(4)
-
-GF(4) uses a small compatibility implementation included in this project.
+### Set parameters and enable enumeration
 
 ```rust
-use aont_search::field::Gf4;
+let t = 2usize;
+let s = 3usize;
 
-let field = Gf4::default();
+let run_bnb = true;
+let run_bnb_du_analysis = false;
+let run_bnb_equivalence = false;
 ```
 
----
+The two optional checks run only after enumeration, and only if the relevant mappings were found.
 
-# Running a Search
-
-Most users only need to modify `main.rs`.
-
-There are four things to choose.
-
----
-
-## 1. Choose the field
-
-Example:
-
-```rust
-let field = ArkPrimeField::<F5>::new(F5::from(2u64));
-
-let q = 5;
-```
-
-or
-
-```rust
-let field = Gf4::default();
-
-let q = 4;
-```
-
----
-
-## 2. Choose the AONT parameters
-
-```rust
-let t = 2;
-let s = 3;
-```
-
-This searches for a
-
-
-(t,s,q) - AONT.
-
-
----
-
-## 3. Select optional analyses
-
-```rust
-let run_search = true;
-
-let run_differential_uniformity = true;
-
-let run_column_equivalence_check = true;
-```
-
-Any of these can be turned off.
-
----
-
-## 4. Configure the search
+### Configure the search
 
 ```rust
 let mut config = SearchConfig::new(t, s);
-
 config.fix_zero = true;
-
 config.first_nonlinear_to_keep = 5;
-
 config.progress_report_interval = 1_000_000;
-
 config.estimator_samples = 5_000;
 ```
 
-### `fix_zero`
+| Setting | Purpose |
+|---|---|
+| `fix_zero` | Restrict enumeration to mappings satisfying `f(0)=0`; results are normalized representatives, not the unnormalized total. |
+| `first_nonlinear_to_keep` | Number of nonlinear examples retained in memory; output files are handled separately. |
+| `progress_report_interval` | Number of visited branches between progress reports. |
+| `estimator_samples` | Number of randomized paths used for search-tree estimation. |
 
-If enabled,
-
-```
-f(0)=0
-```
-
-is enforced during the search.
-
-This removes the output translation symmetry and usually reduces the search space dramatically.
-
----
-
-### `first_nonlinear_to_keep`
-
-Controls how many nonlinear AONTs are kept in memory after the search.
-
-**This does NOT affect what is written to disk.**
-
-Every nonlinear AONT is still written to `nonlinear.txt`.
-
----
-
-### `progress_report_interval`
-
-Print a progress report every N visited search nodes.
-
-Typical values:
-
-```
-100000
-1000000
-10000000
-```
-
----
-
-### `estimator_samples`
-
-Number of randomized search paths used by the tree estimator.
-
-Higher values generally give better estimates but take longer before the search starts.
-
----
-
-# Running
-
-Compile:
+Run the main executable:
 
 ```bash
-cargo build --release
+cargo run --release --bin aont-search
 ```
+
+The enumeration writes `linear.txt` and `nonlinear.txt` according to the search configuration. Optional analysis may produce `nonlinear_differential_uniformity.txt`. Output paths and existing files should be checked before rerunning experiments.
+
+## 2. Randomized search for low differential uniformity
+
+In the second part of `src/main.rs`, find the section **RANDOMIZED SEARCH AND FULL DIFFERENTIAL UNIFORMITY VERIFICATION**. This part has its **own** field and dimension settings, independent of the BnB section.
+
+The example uses `GF(11)` with `s=4`. It constructs a Cauchy matrix from two disjoint symbol sets:
+
+```rust
+let a: Vec<Symbol> = (0..s).collect();
+let b: Vec<Symbol> = (s..2 * s).collect();
+let matrix = cauchy_matrix(&a, &b, &field);
+```
+
+This particular construction requires **`q >= 2*s`**.
+
+Enable the search and configure it:
+
+```rust
+let run_random_search = true;
+let run_exact_verification = false;
+
+let random_config = SampledRandomSearchConfig {
+    max_trials: 100_000,
+    sampled_rows: 10_000,
+    seed: 123_456,
+    output_path: format!("sampled_s{s}_q{q}.txt"),
+    progress_interval: 1_000,
+};
+```
+
+The search independently selects coordinate-wise input and output permutations and evaluates candidates using sampled DDT rows. **The sampled maximum is only a lower bound on exact differential uniformity**; it is not an exact result. Saved promising candidates should be checked using the full verifier.
+
+Run the same main executable:
+
+```bash
+cargo run --release --bin aont-search
+```
+
+## 3. Exact differential-uniformity verification
+
+In the same section of `src/main.rs`, set:
+
+```rust
+let run_random_search = false;
+let run_exact_verification = true;
+let use_metal = false; // true for the macOS Metal verifier
+```
+
+Set the field size and `s` to match the candidate. Copy the `input_perms` and `output_perms` vectors from `permutations_with_low_delta.txt` into the corresponding arrays in `src/main.rs`.
+
+The current example is for `q=11, s=4` and records a candidate with **Δ = 23**. For a different parameter set, **replace both permutation arrays**: there must be `s` input and `s` output permutations, each containing the `q` symbols exactly once.
+
+- With `use_metal = false`, `serial_flat_verify` runs on the CPU; `cpu_progress_interval` controls reporting.
+- With `use_metal = true` on macOS, `metal_flat_verify` runs on the GPU; `metal_batch_size` controls the batch size.
 
 Run:
 
 ```bash
-cargo run --release
+cargo run --release --bin aont-search
 ```
 
----
+This is an **exact** verification of the specified candidate, not a proof that its differential uniformity is minimal among all AONTs with the same parameters.
 
-# Output Files
+## 4. Statistical experiments
 
-The search generates
+The statistical binaries independently generate `s` input and `s` output permutations for each trial, using Rust's `shuffle` functionality. They calculate the **exact** differential uniformity for every candidate (rather than screening candidates by sampled rows). By default both binaries use `TRIALS = 100`.
 
-```
-linear.txt
-```
+Each experiment records every trial's differential uniformity, a maximizing input/output difference, the input/output permutations, and elapsed time. Final statistics include the mean, standard deviation, median, minimum, and maximum.
 
-containing all linear AONTs and
+### Apple Metal (macOS)
 
-```
-nonlinear.txt
-```
+File: `src/bin/delta_statistics.rs`.
 
-containing all nonlinear AONTs.
-
-Mappings are stored as
-
-```
-BEGIN_AONT
-
-...
-
-MAPPING:
-
-[0,0,0] -> [1,2,0]
-
-...
-
-END_AONT
+```bash
+cargo run --release --bin delta_statistics -- 11 4
 ```
 
----
+The first argument is `q` and the second is `s`. The file currently dispatches the prime fields `7, 11, 13, 17, 23, 31, 43, 257`. The batch size is configured in the source with `BATCH_SIZE = 8`.
 
-# Optional Analysis Tools
+### NVIDIA CUDA (Linux)
 
-## Differential Uniformity
+File: `src/bin/delta_statistics_cuda.rs`.
 
-Computes the differential uniformity of every nonlinear AONT.
-
-Enable by setting
-
-```rust
-run_differential_uniformity = true;
+```bash
+cargo run --release --bin delta_statistics_cuda -- 47 4
 ```
 
-The output is written to
+This command assumes that the repository's CUDA code has been correctly built and linked on a compatible Linux/NVIDIA system; the supplied Cargo manifest alone is not sufficient to verify that setup. This binary currently dispatches `7, 11, 13, 17, 23, 31, 43, 47, 257`, and uses `BATCH_SIZE = 16`.
 
-```
-nonlinear_differential_uniformity.txt
-```
+Both programs require `q >= 2*s` for their Cauchy construction. To change the number of trials, edit `TRIALS` near the top of the appropriate source file.
 
----
+**Output location:** each binary creates a file in the *current working directory*:
 
-## Column-wise Equivalence
-
-Tests the conjecture that every nonlinear AONT is obtainable from a linear AONT by independently permuting the symbols in each input and output coordinate.
-
-Enable by setting
-
-```rust
-run_column_equivalence_check = true;
+```text
+delta_statistics_s4_q11.txt
+delta_statistics_cuda_s4_q47.txt
 ```
 
-The checker reports
+The existing `Delta_statistics/` directory contains saved experiment records. The programs do **not** automatically write into that directory. Output files with the same name are overwritten when a new experiment starts, so back up existing results before rerunning.
 
-- number of nonlinear mappings covered
-- number missing
-- indices of any missing nonlinear mappings
+## 5. Results and saved permutations
 
----
+- `linear.txt`, `nonlinear.txt`: enumeration output.
+- `nonlinear_differential_uniformity.txt`: differential-uniformity analysis of enumerated nonlinear mappings.
+- `permutations_with_low_delta.txt`: recorded low-Δ candidate permutations, grouped by `(s,q)`; use them with the exact verifier to reproduce individual values.
+- `Delta_statistics/`: saved results from the independent random-permutation experiments. The filename identifies the field size and number of coordinates; the `cuda` prefix distinguishes CUDA runs.
 
-# Citation
+The saved permutations allow verification of the reported value for that particular construction.
 
-If you use this code in academic work, please cite the associated paper once available.
+## 6. Source-code guide
+
+| File | Role |
+|---|---|
+| `src/main.rs` | Editable entry point for enumeration, sampled randomized search, and exact verification |
+| `src/bnb.rs`, `src/search.rs`, `src/config.rs` | Enumeration and search configuration |
+| `src/field.rs` | Finite-field operations and matrix constructions |
+| `src/sampled_random_search.rs` | Parallel randomized candidate screening |
+| `src/serial_flat_verifier.rs` | Serial exact differential-uniformity verifier |
+| `src/metal_flat_verifier.rs`, `.metal` | Apple Metal verifier and shader |
+| `src/cuda_flat_verifier.rs`, `.cu` | CUDA verifier and kernel |
+| `src/bin/delta_statistics.rs` | Metal statistical experiment executable |
+| `src/bin/delta_statistics_cuda.rs` | CUDA statistical experiment executable |
+| `src/differential_uniformity.rs` | Differential-uniformity analysis for enumerated mappings |
+| `src/equivalence.rs`, `src/linearity.rs` | Equivalence and linearity analysis |
+| `src/mapping_io.rs`, `src/types.rs` | Mapping I/O and shared types |
+| `src/hamming.rs`, `src/time_estimator.rs` | Hamming-distance utilities and search-time estimation |
+| `src/verify_search_result.rs` | Utilities for constructing/checking search-result mappings |
+| `src/lib.rs` | Library module exports |
+
+## 7. Reproducing an example
+
+To verify the saved `(s=4, q=11)` example:
+
+1. In the randomized-search/verification section of `src/main.rs`, keep the `GF(11)` field and set `s=4`.
+2. Set `run_random_search = false` and `run_exact_verification = true`.
+3. Use the supplied `input_perms` and `output_perms` (or copy them from `permutations_with_low_delta.txt`).
+4. Set `use_metal = false` for serial verification, or `true` for macOS Metal verification.
+5. Run `cargo run --release --bin aont-search` and inspect the reported differential uniformity; the recorded candidate has `Δ = 23`.
+
+For statistical reproduction, use the appropriate binary and inspect its per-trial output. The binaries currently use `thread_rng()`, so rerunning an experiment generates new random permutations and will not reproduce the *same sequence of trials*.
+
+## Citation
+
+If you use this code in academic work, please cite the associated paper when available.
