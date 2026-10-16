@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 ark-ff = "0.6"
 rand = "0.8"
+rayon = "1.10"
+metal = "0.32"

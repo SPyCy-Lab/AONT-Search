@@ -9,3 +9,8 @@ pub mod mapping_io;
 pub mod search;
 pub mod time_estimator;
 pub mod types;
+pub mod verify_search_result;
+pub mod sampled_random_search;
+pub mod serial_flat_verifier;
+pub mod metal_flat_verifier;
+pub mod cuda_flat_verifier;
